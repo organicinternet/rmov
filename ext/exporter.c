@@ -24,9 +24,25 @@ static VALUE exporter_new(VALUE klass)
   return Data_Make_Struct(klass, struct RExporter, exporter_mark, exporter_free, rExporter);
 }
 
-static ComponentInstance exporter_component(VALUE obj)
+static ComponentInstance exporter_component_mov(VALUE obj)
 {
   ComponentInstance component = OpenDefaultComponent('spit', 'MooV');
+  if (REXPORTER(obj)->settings) {
+    MovieExportSetSettingsFromAtomContainer(component, REXPORTER(obj)->settings);
+  }
+  return component;
+}
+static ComponentInstance exporter_component_mp4(VALUE obj)
+{
+  ComponentInstance component = OpenDefaultComponent('spit', 'mpg4');
+  if (REXPORTER(obj)->settings) {
+    MovieExportSetSettingsFromAtomContainer(component, REXPORTER(obj)->settings);
+  }
+  return component;
+}
+static ComponentInstance exporter_component_3gp(VALUE obj)
+{
+  ComponentInstance component = OpenDefaultComponent('spit', '3gpp');
   if (REXPORTER(obj)->settings) {
     MovieExportSetSettingsFromAtomContainer(component, REXPORTER(obj)->settings);
   }
@@ -43,12 +59,70 @@ static ComponentInstance exporter_component(VALUE obj)
   method. It will be called regularly during the process and pass the 
   percentage complete (0.0 to 1.0) as an argument to the block.
 */
-static VALUE exporter_export_to_file(VALUE obj, VALUE filepath)
+static VALUE exporter_export_to_file_mov(VALUE obj, VALUE filepath)
 {
   OSErr err;
   FSSpec fs;
   Movie movie = MOVIE(rb_iv_get(obj, "@movie"));
-  ComponentInstance component = exporter_component(obj);
+  ComponentInstance component = exporter_component_mov(obj);
+  
+  if (rb_block_given_p())
+    SetMovieProgressProc(movie, (MovieProgressUPP)movie_progress_proc, rb_block_proc());
+  
+  // Activate so QuickTime doesn't export a white frame
+  SetMovieActive(movie, TRUE);
+  
+  err = NativePathNameToFSSpec(RSTRING(filepath)->ptr, &fs, 0);
+  if (err != fnfErr)
+    rb_raise(eQuickTime, "Error %d occurred while opening file for export at %s.", err, RSTRING(filepath)->ptr);
+  
+  // TODO use exporter settings when converting movie
+  err = ConvertMovieToFile(movie, 0, &fs, 'MooV', 'TVOD', 0, 0, 0, component);
+  if (err != noErr)
+    rb_raise(eQuickTime, "Error %d occurred while attempting to export movie to file %s.", err, RSTRING(filepath)->ptr);
+  
+  if (rb_block_given_p())
+    SetMovieProgressProc(movie, 0, 0);
+  
+  CloseComponent(component);
+  
+  return Qnil;
+}
+static VALUE exporter_export_to_file_mp4(VALUE obj, VALUE filepath)
+{
+  OSErr err;
+  FSSpec fs;
+  Movie movie = MOVIE(rb_iv_get(obj, "@movie"));
+  ComponentInstance component = exporter_component_mp4(obj);
+  
+  if (rb_block_given_p())
+    SetMovieProgressProc(movie, (MovieProgressUPP)movie_progress_proc, rb_block_proc());
+  
+  // Activate so QuickTime doesn't export a white frame
+  SetMovieActive(movie, TRUE);
+  
+  err = NativePathNameToFSSpec(RSTRING(filepath)->ptr, &fs, 0);
+  if (err != fnfErr)
+    rb_raise(eQuickTime, "Error %d occurred while opening file for export at %s.", err, RSTRING(filepath)->ptr);
+  
+  // TODO use exporter settings when converting movie
+  err = ConvertMovieToFile(movie, 0, &fs, 'MooV', 'TVOD', 0, 0, 0, component);
+  if (err != noErr)
+    rb_raise(eQuickTime, "Error %d occurred while attempting to export movie to file %s.", err, RSTRING(filepath)->ptr);
+  
+  if (rb_block_given_p())
+    SetMovieProgressProc(movie, 0, 0);
+  
+  CloseComponent(component);
+  
+  return Qnil;
+}
+static VALUE exporter_export_to_file_3gp(VALUE obj, VALUE filepath)
+{
+  OSErr err;
+  FSSpec fs;
+  Movie movie = MOVIE(rb_iv_get(obj, "@movie"));
+  ComponentInstance component = exporter_component_3gp(obj);
   
   if (rb_block_given_p())
     SetMovieProgressProc(movie, (MovieProgressUPP)movie_progress_proc, rb_block_proc());
@@ -82,13 +156,87 @@ static VALUE exporter_export_to_file(VALUE obj, VALUE filepath)
   save_settings to save them to a file, and load_settings to load them 
   back again.
 */
-static VALUE exporter_open_settings_dialog(VALUE obj)
+static VALUE exporter_open_settings_dialog_mov(VALUE obj)
 {
   Boolean canceled;
   OSErr err;
   ProcessSerialNumber current_process = {0, kCurrentProcess};
   Movie movie = MOVIE(rb_iv_get(obj, "@movie"));
-  ComponentInstance component = exporter_component(obj);
+  ComponentInstance component = exporter_component_mov(obj);
+  
+  // Bring this process to the front
+  err = TransformProcessType(&current_process, kProcessTransformToForegroundApplication);
+  if (err != noErr) {
+    rb_raise(eQuickTime, "Error %d occurred while bringing this application to the forground.", err);
+  }
+  SetFrontProcess(&current_process);
+  
+  // Show export dialog and save settings
+  err = MovieExportDoUserDialog(component, movie, 0, 0, GetMovieDuration(movie), &canceled);
+  if (err != noErr) {
+    rb_raise(eQuickTime, "Error %d occurred while opening export dialog.", err);
+  }
+  
+  if (!canceled) {
+    // Clear existing settings if there are any
+    if (REXPORTER(obj)->settings) {
+      QTDisposeAtomContainer(REXPORTER(obj)->settings);
+    }
+    MovieExportGetSettingsAsAtomContainer(component, &REXPORTER(obj)->settings);
+  }
+  
+  CloseComponent(component);
+  
+  if (canceled) {
+    return Qfalse;
+  } else {
+    return Qtrue;
+  }
+}
+static VALUE exporter_open_settings_dialog_mp4(VALUE obj)
+{
+  Boolean canceled;
+  OSErr err;
+  ProcessSerialNumber current_process = {0, kCurrentProcess};
+  Movie movie = MOVIE(rb_iv_get(obj, "@movie"));
+  ComponentInstance component = exporter_component_mp4(obj);
+  
+  // Bring this process to the front
+  err = TransformProcessType(&current_process, kProcessTransformToForegroundApplication);
+  if (err != noErr) {
+    rb_raise(eQuickTime, "Error %d occurred while bringing this application to the forground.", err);
+  }
+  SetFrontProcess(&current_process);
+  
+  // Show export dialog and save settings
+  err = MovieExportDoUserDialog(component, movie, 0, 0, GetMovieDuration(movie), &canceled);
+  if (err != noErr) {
+    rb_raise(eQuickTime, "Error %d occurred while opening export dialog.", err);
+  }
+  
+  if (!canceled) {
+    // Clear existing settings if there are any
+    if (REXPORTER(obj)->settings) {
+      QTDisposeAtomContainer(REXPORTER(obj)->settings);
+    }
+    MovieExportGetSettingsAsAtomContainer(component, &REXPORTER(obj)->settings);
+  }
+  
+  CloseComponent(component);
+  
+  if (canceled) {
+    return Qfalse;
+  } else {
+    return Qtrue;
+  }
+}
+static VALUE exporter_open_settings_dialog_3gp(VALUE obj)
+{
+  Boolean canceled;
+  OSErr err;
+  ProcessSerialNumber current_process = {0, kCurrentProcess};
+  Movie movie = MOVIE(rb_iv_get(obj, "@movie"));
+  ComponentInstance component = exporter_component_3gp(obj);
   
   // Bring this process to the front
   err = TransformProcessType(&current_process, kProcessTransformToForegroundApplication);
@@ -188,8 +336,12 @@ void Init_quicktime_exporter()
   mQuickTime = rb_define_module("QuickTime");
   cExporter = rb_define_class_under(mQuickTime, "Exporter", rb_cObject);
   rb_define_alloc_func(cExporter, exporter_new);
-  rb_define_method(cExporter, "export", exporter_export_to_file, 1);
-  rb_define_method(cExporter, "open_settings_dialog", exporter_open_settings_dialog, 0);
+  rb_define_method(cExporter, "export_mov", exporter_export_to_file_mov, 1);
+  rb_define_method(cExporter, "open_settings_dialog_mov", exporter_open_settings_dialog_mov, 0);
+  rb_define_method(cExporter, "export_mp4", exporter_export_to_file_mp4, 1);
+  rb_define_method(cExporter, "open_settings_dialog_mp4", exporter_open_settings_dialog_mp4, 0);
+  rb_define_method(cExporter, "export_3gp", exporter_export_to_file_3gp, 1);
+  rb_define_method(cExporter, "open_settings_dialog_3gp", exporter_open_settings_dialog_3gp, 0);
   rb_define_method(cExporter, "load_settings", exporter_load_settings, 1);
   rb_define_method(cExporter, "save_settings", exporter_save_settings, 1);
 }
